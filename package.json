@@ -1,0 +1,16 @@
+{
+  "name": "cheater-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for logging cheater reports.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/deploy-commands.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "discord.js": "^14.22.1"
+  }
+}
