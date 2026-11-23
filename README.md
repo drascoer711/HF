@@ -9,13 +9,15 @@ A Discord.js bot with two slash commands:
 
 1. Install Node.js 18 or newer and run `npm install`.
 2. Set `DISCORD_TOKEN`, `CLIENT_ID`, and optionally `GUILD_ID` in your environment (or copy `.env.example` to `.env` for local development).
-3. Run `npm run deploy` once to register the slash commands, then run `npm start`.
+3. Run `npm start`. The bot automatically registers the commands on startup. You can also run `npm run deploy` manually if desired.
 
-Setting `GUILD_ID` registers commands to that server for faster testing. Without it, commands are registered globally and can take time to appear.
+Set `CLIENT_ID` to the **Application ID** from the Discord Developer Portal, not the bot token. Set `GUILD_ID` to the server ID where you want commands to appear immediately. Without `GUILD_ID`, commands register globally and may take a while to show up.
+
+Invite/install the bot in the server with the `bot` and `applications.commands` scopes. Make sure the bot is actually in the same server as the `GUILD_ID` you configured.
 
 ## Deploying as a Render Web Service
 
-This bot includes a small HTTP health server so it can run as a Render **Web Service**. In Render, configure:
+Configure the Render service with:
 
 - **Runtime:** Node
 - **Build command:** `npm install`
@@ -23,10 +25,6 @@ This bot includes a small HTTP health server so it can run as a Render **Web Ser
 - **Environment variables:** `DISCORD_TOKEN`, `CLIENT_ID`, and optionally `GUILD_ID`
 - **Health check path:** `/health` (optional)
 
-The app listens on Render's `PORT` environment variable and binds to `0.0.0.0`. You do not need to set `PORT` manually in Render. For local use, it defaults to `10000`; you can set `PORT` if that port is occupied.
+The app listens on Render's `PORT` environment variable and binds to `0.0.0.0`. Render supplies `PORT` automatically.
 
-The health endpoint returns HTTP 200 after Discord is connected and HTTP 503 while the bot is starting. The root path `/` provides the same health check.
-
-### Important: report storage
-
-Reports are stored in the local `cheaters.json` file. A Render Web Service's filesystem is not persistent across all redeploys/restarts unless a persistent disk is configured. Attach a persistent disk and set `DATA_FILE` to a file path on that disk before relying on this bot for long-term records. Without persistent storage, reports may be lost when the service restarts or redeploys.
+Reports are stored locally in `cheaters.json`. Render's filesystem may not persist through restarts/redeploys unless you configure a persistent disk. Attach a disk and set `DATA_FILE` to a path on that disk to keep reports long-term.
