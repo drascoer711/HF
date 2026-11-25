@@ -2,7 +2,14 @@ require('dotenv').config();
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { Client, Collection, GatewayIntentBits, REST, Routes } = require('discord.js');
+const {
+  Client,
+  Collection,
+  GatewayIntentBits,
+  Partials,
+  REST,
+  Routes,
+} = require('discord.js');
 
 if (!process.env.DISCORD_TOKEN) {
   throw new Error('DISCORD_TOKEN is required. Add it in your Render environment variables.');
@@ -16,32 +23,33 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('PORT must be a valid TCP port number.');
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel],
+});
 client.commands = new Collection();
 
 const commandDir = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandDir).filter(file => file.endsWith('.js'));
-for (const file of commandFiles) {
+for (const file of fs.readdirSync(commandDir).filter(file => file.endsWith('.js'))) {
   const command = require(path.join(commandDir, file));
   client.commands.set(command.data.name, command);
 }
 
-// Register commands automatically whenever Render starts/restarts the bot.
-// Setting GUILD_ID makes them appear promptly in that server; without it,
-// commands are registered globally and Discord may take a while to publish them.
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const route = process.env.GUILD_ID
     ? Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID)
     : Routes.applicationCommands(process.env.CLIENT_ID);
-
   await rest.put(route, {
     body: [...client.commands.values()].map(command => command.data.toJSON()),
   });
   console.log(`Registered ${client.commands.size} slash commands ${process.env.GUILD_ID ? `in guild ${process.env.GUILD_ID}` : 'globally'}.`);
 }
 
-// Render Web Services require an HTTP listener on the assigned PORT.
 const server = http.createServer((request, response) => {
   if (request.url === '/' || request.url === '/health') {
     const healthy = client.isReady();
@@ -52,9 +60,64 @@ const server = http.createServer((request, response) => {
     response.end(JSON.stringify({ status: healthy ? 'ok' : 'starting' }));
     return;
   }
-
   response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify({ error: 'Not found' }));
+});
+
+async function isReplyToBot(message) {
+  if (!message.reference?.messageId) return false;
+  try {
+    const referenced = message.reference.guildId
+      ? await message.channel.messages.fetch(message.reference.messageId)
+      : await message.channel.messages.fetch(message.reference.messageId);
+    return referenced.author.id === client.user.id;
+  } catch {
+    return false;
+  }
+}
+
+async function sendInChunks(message, text) {
+  const chunks = text.match(/[\s\S]{1,1900}/g) || ['I could not produce a response.'];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const options = { content: chunks[i], allowedMentions: { parse: [] } };
+    if (i === 0) await message.reply(options);
+    else await message.channel.send(options);
+  }
+}
+
+client.on('messageCreate', async message => {
+  try {
+    if (message.author.bot || message.webhookId || !client.user) return;
+    const isDm = !message.guild;
+    const isMention = message.mentions.users.has(client.user.id);
+    const isBotReply = await isReplyToBot(message);
+    // In servers only respond when explicitly addressed; in DMs respond to messages.
+    if (!isDm && !isMention && !isBotReply) return;
+
+    const prompt = message.content
+      .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
+      .trim();
+    if (!prompt) {
+      await message.reply({
+        content: 'Hi! Mention me with a question, reply to one of my messages, or send me a DM.',
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    // Keep each user's memory isolated by server/channel, and separate per-user DMs.
+    const conversationKey = `${message.guildId || 'dm'}:${message.channelId}:${message.author.id}`;
+    await message.channel.sendTyping().catch(() => {});
+    const { getReply } = require('./ai-chat');
+    const answer = await getReply(conversationKey, prompt);
+    await sendInChunks(message, answer);
+  } catch (error) {
+    console.error('AI message response failed:', error);
+    await message.reply({
+      content: `I couldn't answer right now: ${error.message}`.slice(0, 1900),
+      allowedMentions: { parse: [] },
+    }).catch(() => {});
+  }
 });
 
 client.on('interactionCreate', async interaction => {
@@ -69,24 +132,25 @@ client.on('interactionCreate', async interaction => {
       const [, direction, rawPage] = interaction.customId.split(':');
       const currentPage = Number(rawPage);
       if (!Number.isInteger(currentPage)) return;
-
       const nextPage = direction === 'next' ? currentPage + 1 : currentPage - 1;
       const { readRecords } = require('./store');
       const records = readRecords()
         .filter(record => record.guildId === interaction.guildId)
         .reverse();
+      await interaction.update({
+        ...client.commands.get('cheaters').pageEmbed(records, nextPage),
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
 
-      const cheatersCommand = client.commands.get('cheaters');
-      await interaction.update(cheatersCommand.pageEmbed(records, nextPage));
+    if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.customId.startsWith('altchecker:')) {
+      await client.commands.get('altchecker').handleComponent(interaction);
     }
   } catch (error) {
     console.error('Interaction failed:', error);
     if (!interaction.isRepliable()) return;
-
-    const response = {
-      content: 'There was an error handling this interaction.',
-      ephemeral: true,
-    };
+    const response = { content: 'There was an error handling this interaction.', ephemeral: true };
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(response).catch(console.error);
     } else {
@@ -95,13 +159,8 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-client.once('ready', readyClient => {
-  console.log(`Logged in as ${readyClient.user.tag}`);
-});
-
-server.listen(port, '0.0.0.0', () => {
-  console.log(`Health server listening on 0.0.0.0:${port}`);
-});
+client.once('ready', readyClient => console.log(`Logged in as ${readyClient.user.tag}`));
+server.listen(port, '0.0.0.0', () => console.log(`Health server listening on 0.0.0.0:${port}`));
 
 (async () => {
   try {
@@ -121,6 +180,5 @@ function shutdown(signal) {
   });
   setTimeout(() => process.exit(1), 10_000).unref();
 }
-
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 process.once('SIGINT', () => shutdown('SIGINT'));

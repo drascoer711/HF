@@ -1,33 +1,26 @@
 # HF Discord Bot
 
-A Discord.js bot with three slash commands:
+The bot has moderation slash commands, Roblox/Discord public-profile lookup, and an AI chat assistant.
 
-- `/log-cheater user:<ID or mention> cheating:<text> proof:<optional text or URL>` — records a report in the current server.
-- `/cheaters` — lists reports for the current server with pagination buttons.
-- `/removecheater user-id:<ID or mention>` — removes all reports for that user in the current server. Requires **Manage Server** permission.
+## AI chat
 
-## Setup
+- DM the bot to chat privately.
+- In a server, mention the bot or reply to one of its messages.
+- It uses `OPENAI_API_KEY` and the optional `OPENAI_MODEL` (defaults to `gpt-4o-mini`). No new AI environment variables are needed.
+- Conversation history is kept separately for each user in each channel and saved to `conversations.json`, alongside the report data. It survives restarts only when that file is on persistent storage. The bot sends up to the latest 40 messages as context; this is persistent recent memory, not literally unlimited memory.
+- Addressed messages are sent to the configured OpenAI API for a response. Avoid sharing passwords, tokens, or other sensitive information.
 
-1. Install Node.js 18 or newer and run `npm install`.
-2. Set `DISCORD_TOKEN`, `CLIENT_ID`, and optionally `GUILD_ID` in your environment (or copy `.env.example` to `.env` for local development).
-3. Run `npm start`. The bot automatically registers the commands on startup. You can also run `npm run deploy` manually if desired.
+**Discord setup requirement:** In the Discord Developer Portal, open your application → **Bot** → **Privileged Gateway Intents** and enable **Message Content Intent**. The code also requests this intent. Without enabling it, the bot cannot read message text and chat replies will not work. The bot needs to be invited to the server with the `bot` and `applications.commands` scopes.
 
-For the `user` and `user-id` options, paste the user's Discord ID or mention them. To copy an ID, enable Developer Mode in Discord, then use **Copy User ID**.
+## Commands
 
-Set `CLIENT_ID` to the **Application ID** from the Discord Developer Portal, not the bot token. Set `GUILD_ID` to the server ID where you want commands to appear immediately. Without `GUILD_ID`, commands register globally and may take a while to show up.
+- `/log-cheater user:<ID or mention> cheating:<text> proof:<optional text or URL> alt-status:<optional>` — logs a report for this server.
+- `/cheaters` — paginated report list.
+- `/removecheater user-id:<ID or mention>` — removes reports for that user in this server; requires **Manage Server**.
+- `/altchecker roblox-user:<optional> discord-user-id:<optional>` — public profile details and cautious AI notes, with a follow-up question button. It does not determine whether accounts belong to the same person.
 
-Invite/install the bot in the server with the `bot` and `applications.commands` scopes. Make sure the bot is actually in the same server as the `GUILD_ID` you configured.
+## Deploy on Render Web Service
 
-## Deploying as a Render Web Service
+Use Node, build command `npm install`, start command `npm start`, and set `DISCORD_TOKEN`, `CLIENT_ID`, and optionally `GUILD_ID`. Keep the existing `OPENAI_API_KEY` and optionally `OPENAI_MODEL` values. Render provides `PORT` automatically; health check path `/health` is optional.
 
-Configure the Render service with:
-
-- **Runtime:** Node
-- **Build command:** `npm install`
-- **Start command:** `npm start`
-- **Environment variables:** `DISCORD_TOKEN`, `CLIENT_ID`, and optionally `GUILD_ID`
-- **Health check path:** `/health` (optional)
-
-The app listens on Render's `PORT` environment variable and binds to `0.0.0.0`. Render supplies `PORT` automatically.
-
-Reports are stored locally in `cheaters.json`. Render's filesystem may not persist through restarts/redeploys unless you configure a persistent disk. Attach a disk and set `DATA_FILE` to a path on that disk to keep reports long-term.
+To persist reports and AI conversation memory, attach a persistent disk and set the existing `DATA_FILE` value to a path on that disk, for example `/var/data/cheaters.json`. The conversation file is saved next to it as `/var/data/conversations.json`. Without a persistent disk, Render may discard these files on restart or redeploy.
