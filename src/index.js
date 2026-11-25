@@ -2,7 +2,14 @@ require('dotenv').config();
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { Client, Collection, GatewayIntentBits, REST, Routes } = require('discord.js');
+const {
+  Client,
+  Collection,
+  GatewayIntentBits,
+  Partials,
+  REST,
+  Routes,
+} = require('discord.js');
 
 if (!process.env.DISCORD_TOKEN) {
   throw new Error('DISCORD_TOKEN is required. Add it in your Render environment variables.');
@@ -16,12 +23,18 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('PORT must be a valid TCP port number.');
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel],
+});
 client.commands = new Collection();
 
 const commandDir = path.join(__dirname, 'commands');
-const commandFiles = fs.readdirSync(commandDir).filter(file => file.endsWith('.js'));
-for (const file of commandFiles) {
+for (const file of fs.readdirSync(commandDir).filter(file => file.endsWith('.js'))) {
   const command = require(path.join(commandDir, file));
   client.commands.set(command.data.name, command);
 }
@@ -49,6 +62,62 @@ const server = http.createServer((request, response) => {
   }
   response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify({ error: 'Not found' }));
+});
+
+async function isReplyToBot(message) {
+  if (!message.reference?.messageId) return false;
+  try {
+    const referenced = message.reference.guildId
+      ? await message.channel.messages.fetch(message.reference.messageId)
+      : await message.channel.messages.fetch(message.reference.messageId);
+    return referenced.author.id === client.user.id;
+  } catch {
+    return false;
+  }
+}
+
+async function sendInChunks(message, text) {
+  const chunks = text.match(/[\s\S]{1,1900}/g) || ['I could not produce a response.'];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const options = { content: chunks[i], allowedMentions: { parse: [] } };
+    if (i === 0) await message.reply(options);
+    else await message.channel.send(options);
+  }
+}
+
+client.on('messageCreate', async message => {
+  try {
+    if (message.author.bot || message.webhookId || !client.user) return;
+    const isDm = !message.guild;
+    const isMention = message.mentions.users.has(client.user.id);
+    const isBotReply = await isReplyToBot(message);
+    // In servers only respond when explicitly addressed; in DMs respond to messages.
+    if (!isDm && !isMention && !isBotReply) return;
+
+    const prompt = message.content
+      .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
+      .trim();
+    if (!prompt) {
+      await message.reply({
+        content: 'Hi! Mention me with a question, reply to one of my messages, or send me a DM.',
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    // Keep each user's memory isolated by server/channel, and separate per-user DMs.
+    const conversationKey = `${message.guildId || 'dm'}:${message.channelId}:${message.author.id}`;
+    await message.channel.sendTyping().catch(() => {});
+    const { getReply } = require('./ai-chat');
+    const answer = await getReply(conversationKey, prompt);
+    await sendInChunks(message, answer);
+  } catch (error) {
+    console.error('AI message response failed:', error);
+    await message.reply({
+      content: `I couldn't answer right now: ${error.message}`.slice(0, 1900),
+      allowedMentions: { parse: [] },
+    }).catch(() => {});
+  }
 });
 
 client.on('interactionCreate', async interaction => {
