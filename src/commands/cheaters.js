@@ -24,8 +24,12 @@ function pageEmbed(records, page) {
     embed.setDescription(slice.map((record, index) => {
       const number = safePage * PAGE_SIZE + index + 1;
       const date = new Date(record.createdAt).toLocaleString();
+      const altStatus = record.altStatus === 'alt'
+        ? 'Alt (unverified)'
+        : record.altStatus === 'not-alt' ? 'Not an alt (unverified)' : 'Not specified';
       return `**${number}. <@${record.userId}>**\n` +
         `**Cheating:** ${record.cheating}\n` +
+        `**Alt status:** ${altStatus}\n` +
         `**Proof:** ${record.proof}\n` +
         `*Logged ${date}*`;
     }).join('\n\n'));
@@ -60,6 +64,6 @@ module.exports = {
       .filter(record => record.guildId === interaction.guildId)
       .reverse();
 
-    await interaction.reply(pageEmbed(records, 0));
+    await interaction.reply({ ...pageEmbed(records, 0), allowedMentions: { parse: [] } });
   },
 };

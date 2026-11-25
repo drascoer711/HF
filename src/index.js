@@ -26,22 +26,17 @@ for (const file of commandFiles) {
   client.commands.set(command.data.name, command);
 }
 
-// Register commands automatically whenever Render starts/restarts the bot.
-// Setting GUILD_ID makes them appear promptly in that server; without it,
-// commands are registered globally and Discord may take a while to publish them.
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const route = process.env.GUILD_ID
     ? Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID)
     : Routes.applicationCommands(process.env.CLIENT_ID);
-
   await rest.put(route, {
     body: [...client.commands.values()].map(command => command.data.toJSON()),
   });
   console.log(`Registered ${client.commands.size} slash commands ${process.env.GUILD_ID ? `in guild ${process.env.GUILD_ID}` : 'globally'}.`);
 }
 
-// Render Web Services require an HTTP listener on the assigned PORT.
 const server = http.createServer((request, response) => {
   if (request.url === '/' || request.url === '/health') {
     const healthy = client.isReady();
@@ -52,7 +47,6 @@ const server = http.createServer((request, response) => {
     response.end(JSON.stringify({ status: healthy ? 'ok' : 'starting' }));
     return;
   }
-
   response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify({ error: 'Not found' }));
 });
@@ -69,24 +63,25 @@ client.on('interactionCreate', async interaction => {
       const [, direction, rawPage] = interaction.customId.split(':');
       const currentPage = Number(rawPage);
       if (!Number.isInteger(currentPage)) return;
-
       const nextPage = direction === 'next' ? currentPage + 1 : currentPage - 1;
       const { readRecords } = require('./store');
       const records = readRecords()
         .filter(record => record.guildId === interaction.guildId)
         .reverse();
+      await interaction.update({
+        ...client.commands.get('cheaters').pageEmbed(records, nextPage),
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
 
-      const cheatersCommand = client.commands.get('cheaters');
-      await interaction.update(cheatersCommand.pageEmbed(records, nextPage));
+    if ((interaction.isButton() || interaction.isModalSubmit()) && interaction.customId.startsWith('altchecker:')) {
+      await client.commands.get('altchecker').handleComponent(interaction);
     }
   } catch (error) {
     console.error('Interaction failed:', error);
     if (!interaction.isRepliable()) return;
-
-    const response = {
-      content: 'There was an error handling this interaction.',
-      ephemeral: true,
-    };
+    const response = { content: 'There was an error handling this interaction.', ephemeral: true };
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp(response).catch(console.error);
     } else {
@@ -95,13 +90,8 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-client.once('ready', readyClient => {
-  console.log(`Logged in as ${readyClient.user.tag}`);
-});
-
-server.listen(port, '0.0.0.0', () => {
-  console.log(`Health server listening on 0.0.0.0:${port}`);
-});
+client.once('ready', readyClient => console.log(`Logged in as ${readyClient.user.tag}`));
+server.listen(port, '0.0.0.0', () => console.log(`Health server listening on 0.0.0.0:${port}`));
 
 (async () => {
   try {
@@ -121,6 +111,5 @@ function shutdown(signal) {
   });
   setTimeout(() => process.exit(1), 10_000).unref();
 }
-
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 process.once('SIGINT', () => shutdown('SIGINT'));

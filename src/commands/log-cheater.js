@@ -19,6 +19,15 @@ module.exports = {
     .addStringOption(option => option
       .setName('proof')
       .setDescription('Optional proof link or description')
+      .setRequired(false))
+    .addStringOption(option => option
+      .setName('alt-status')
+      .setDescription('Optional alt-account status (not verified by the bot)')
+      .addChoices(
+        { name: 'Alt', value: 'alt' },
+        { name: 'Not an alt', value: 'not-alt' },
+        { name: 'Unknown / not checked', value: 'unknown' },
+      )
       .setRequired(false)),
 
   async execute(interaction) {
@@ -35,6 +44,7 @@ module.exports = {
     const userId = match[1] || match[2];
     const cheating = interaction.options.getString('cheating', true).trim().slice(0, 500);
     const proof = interaction.options.getString('proof')?.trim().slice(0, 1000) || 'No proof provided';
+    const altStatus = interaction.options.getString('alt-status') || 'unknown';
 
     if (!cheating) {
       await interaction.reply({ content: 'Describe the cheating behavior.', ephemeral: true });
@@ -46,6 +56,7 @@ module.exports = {
       userId,
       cheating,
       proof,
+      altStatus,
       reporterId: interaction.user.id,
       guildId: interaction.guildId,
       createdAt: new Date().toISOString(),
@@ -53,7 +64,7 @@ module.exports = {
     writeRecords(records);
 
     await interaction.reply({
-      content: `Logged a report for user ID ${userId}.`,
+      content: `Logged a report for user ID ${userId}${altStatus === 'unknown' ? '' : ` (alt status: ${altStatus === 'alt' ? 'Alt' : 'Not an alt'})`}.`,
       ephemeral: true,
     });
   },
