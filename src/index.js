@@ -50,6 +50,40 @@ async function registerCommands() {
   console.log(`Registered ${client.commands.size} slash commands ${process.env.GUILD_ID ? `in guild ${process.env.GUILD_ID}` : 'globally'}.`);
 }
 
+const UPDATE_CHANNEL_ID = process.env.BOT_UPDATE_CHANNEL_ID || '1543612401017159700';
+
+async function announceDeployment() {
+  const releaseId = process.env.RENDER_GIT_COMMIT || process.env.GITHUB_SHA || process.env.BOT_UPDATE_ID;
+  if (!releaseId) {
+    console.log('Skipping update announcement: set RENDER_GIT_COMMIT, GITHUB_SHA, or BOT_UPDATE_ID to identify this release.');
+    return;
+  }
+
+  try {
+    const channel = await client.channels.fetch(UPDATE_CHANNEL_ID);
+    if (!channel?.isTextBased() || !channel.messages || !channel.send) {
+      console.warn(`Update announcement skipped: ${UPDATE_CHANNEL_ID} is not an accessible text channel.`);
+      return;
+    }
+
+    const marker = `HF-BOT-UPDATE:${releaseId}`;
+    const recent = await channel.messages.fetch({ limit: 50 });
+    if (recent.some(message => message.author.id === client.user.id && message.content.includes(marker))) {
+      console.log(`Deployment ${releaseId} was already announced.`);
+      return;
+    }
+
+    const shortReleaseId = releaseId.slice(0, 12);
+    await channel.send({
+      content: `HF bot update deployed (${shortReleaseId}). Commands available: ${[...client.commands.keys()].map(name => `/${name}`).join(', ')}.\n||${marker}||`,
+      allowedMentions: { parse: [] },
+    });
+    console.log(`Announced deployment ${releaseId} in channel ${UPDATE_CHANNEL_ID}.`);
+  } catch (error) {
+    console.error('Could not announce bot deployment:', error);
+  }
+}
+
 const server = http.createServer((request, response) => {
   if (request.url === '/' || request.url === '/health') {
     const healthy = client.isReady();
@@ -67,9 +101,7 @@ const server = http.createServer((request, response) => {
 async function isReplyToBot(message) {
   if (!message.reference?.messageId) return false;
   try {
-    const referenced = message.reference.guildId
-      ? await message.channel.messages.fetch(message.reference.messageId)
-      : await message.channel.messages.fetch(message.reference.messageId);
+    const referenced = await message.channel.messages.fetch(message.reference.messageId);
     return referenced.author.id === client.user.id;
   } catch {
     return false;
@@ -91,12 +123,9 @@ client.on('messageCreate', async message => {
     const isDm = !message.guild;
     const isMention = message.mentions.users.has(client.user.id);
     const isBotReply = await isReplyToBot(message);
-    // In servers only respond when explicitly addressed; in DMs respond to messages.
     if (!isDm && !isMention && !isBotReply) return;
 
-    const prompt = message.content
-      .replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '')
-      .trim();
+    const prompt = message.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
     if (!prompt) {
       await message.reply({
         content: 'Hi! Mention me with a question, reply to one of my messages, or send me a DM.',
@@ -105,7 +134,6 @@ client.on('messageCreate', async message => {
       return;
     }
 
-    // Keep each user's memory isolated by server/channel, and separate per-user DMs.
     const conversationKey = `${message.guildId || 'dm'}:${message.channelId}:${message.author.id}`;
     await message.channel.sendTyping().catch(() => {});
     const { getReply } = require('./ai-chat');
@@ -125,6 +153,7 @@ client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
       const command = client.commands.get(interaction.commandName);
       if (command) await command.execute(interaction);
+      else await interaction.reply({ content: 'That command is not available in this deployment.', ephemeral: true });
       return;
     }
 
@@ -150,16 +179,16 @@ client.on('interactionCreate', async interaction => {
   } catch (error) {
     console.error('Interaction failed:', error);
     if (!interaction.isRepliable()) return;
-    const response = { content: 'There was an error handling this interaction.', ephemeral: true };
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp(response).catch(console.error);
-    } else {
-      await interaction.reply(response).catch(console.error);
-    }
+    const reply = { content: 'There was an error handling this interaction.', ephemeral: true };
+    if (interaction.deferred || interaction.replied) await interaction.followUp(reply).catch(console.error);
+    else await interaction.reply(reply).catch(console.error);
   }
 });
 
-client.once('ready', readyClient => console.log(`Logged in as ${readyClient.user.tag}`));
+client.once('ready', async readyClient => {
+  console.log(`Logged in as ${readyClient.user.tag}`);
+  await announceDeployment();
+});
 server.listen(port, '0.0.0.0', () => console.log(`Health server listening on 0.0.0.0:${port}`));
 
 (async () => {
@@ -167,7 +196,7 @@ server.listen(port, '0.0.0.0', () => console.log(`Health server listening on 0.0
     await registerCommands();
     await client.login(process.env.DISCORD_TOKEN);
   } catch (error) {
-    console.error('Bot startup failed. Check DISCORD_TOKEN, CLIENT_ID, GUILD_ID, and the bot application permissions:', error);
+    console.error('Bot startup failed. Check DISCORD_TOKEN, CLIENT_ID, GUILD_ID, and bot permissions:', error);
     process.exit(1);
   }
 })();
