@@ -17,7 +17,7 @@ Set `DISCORD_TOKEN` and `CLIENT_ID`; optionally set `GUILD_ID` for guild command
 
 For `/accountchecker`, set `BLOXLINK_API_KEY` and `DISCORD_GUILD_ID` to the server ID authorized for the Bloxlink API. If `DISCORD_GUILD_ID` is unset, the bot falls back to the existing `GUILD_ID`. The bot requests Bloxlink's guild-scoped `/discord-to-roblox` and `/roblox-to-discord` endpoints. Keep the API key secret and ensure Bloxlink is configured for the server.
 
-The bot announces each identifiable deployment in Discord channel `1543612401017159700` (override with `BOT_UPDATE_CHANNEL_ID`). The bot needs View Channel, Send Messages, and Read Message History there. Render's `RENDER_GIT_COMMIT` or CI's `GITHUB_SHA` identifies a release; otherwise set `BOT_UPDATE_ID`. A recent-message marker prevents duplicate announcements on restarts of the same release.
+The bot posts a detailed deployment summary in Discord channel `1543612401017159700` (override with `BOT_UPDATE_CHANNEL_ID`). For each release it attempts to include the Git commit message, changed file paths, available slash commands, and a commit link. Set `BOT_UPDATE_NOTES` to provide a human-written summary instead of the commit message. The bot needs View Channel, Send Messages, and Read Message History. Render's `RENDER_GIT_COMMIT` or CI's `GITHUB_SHA` identifies a release; otherwise set `BOT_UPDATE_ID`. A marker prevents duplicate announcements when the same release restarts.
 
 ## Render setup
 

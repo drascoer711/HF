@@ -51,6 +51,40 @@ async function registerCommands() {
 }
 
 const UPDATE_CHANNEL_ID = process.env.BOT_UPDATE_CHANNEL_ID || '1543612401017159700';
+const UPDATE_REPOSITORY = process.env.GITHUB_REPOSITORY || process.env.BOT_UPDATE_REPOSITORY || 'drascoer711/HF';
+
+async function getReleaseDetails(releaseId) {
+  if (process.env.BOT_UPDATE_NOTES?.trim()) {
+    return {
+      summary: process.env.BOT_UPDATE_NOTES.trim().slice(0, 900),
+      files: [],
+    };
+  }
+
+  if (!/^[a-f0-9]{7,64}$/i.test(releaseId)) return null;
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${UPDATE_REPOSITORY}/commits/${releaseId}`,
+      {
+        headers: {
+          accept: 'application/vnd.github+json',
+          'user-agent': 'HF-Discord-Bot/1.0',
+        },
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
+    const commit = await response.json();
+    const summary = String(commit.commit?.message || '').trim().slice(0, 900);
+    const files = Array.isArray(commit.files)
+      ? commit.files.map(file => file.filename).filter(Boolean).slice(0, 12)
+      : [];
+    return { summary, files };
+  } catch (error) {
+    console.warn('Could not load deployment change details from GitHub:', error.message);
+    return null;
+  }
+}
 
 async function announceDeployment() {
   const releaseId = process.env.RENDER_GIT_COMMIT || process.env.GITHUB_SHA || process.env.BOT_UPDATE_ID;
@@ -73,9 +107,26 @@ async function announceDeployment() {
       return;
     }
 
+    const details = await getReleaseDetails(releaseId);
     const shortReleaseId = releaseId.slice(0, 12);
+    const commitUrl = /^[a-f0-9]{7,64}$/i.test(releaseId)
+      ? `https://github.com/${UPDATE_REPOSITORY}/commit/${releaseId}`
+      : null;
+    const lines = [
+      `**HF bot update deployed** (${shortReleaseId})`,
+      details?.summary ? `\n**Changes**\n${details.summary}` : '\n**Changes**\nDetailed commit notes were unavailable for this deployment.',
+    ];
+    if (details?.files?.length) {
+      lines.push(`\n**Files updated**\n${details.files.map(file => `• \`${file}\``).join('\n')}`);
+      const changedFileCount = Number.isInteger(details.changedFileCount) ? details.changedFileCount : details.files.length;
+      if (changedFileCount > details.files.length) lines.push(`• …and ${changedFileCount - details.files.length} more file(s)`);
+    }
+    lines.push(`\n**Registered commands:** ${[...client.commands.keys()].map(name => `/${name}`).join(', ') || 'none'}`);
+    if (commitUrl) lines.push(`\n[View commit](${commitUrl})`);
+    lines.push(`\n||${marker}||`);
+
     await channel.send({
-      content: `HF bot update deployed (${shortReleaseId}). Commands available: ${[...client.commands.keys()].map(name => `/${name}`).join(', ')}.\n||${marker}||`,
+      content: lines.join('\n').slice(0, 1950),
       allowedMentions: { parse: [] },
     });
     console.log(`Announced deployment ${releaseId} in channel ${UPDATE_CHANNEL_ID}.`);
