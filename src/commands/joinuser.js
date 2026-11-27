@@ -11,7 +11,8 @@ async function getJson(url, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: { ...ROBLOX_API_HEADERS, ...(options.headers || {}) },
-    signal: AbortSignal.timeout(8_000),
+    // Keep each Roblox call bounded so the Discord interaction always gets a result.
+    signal: AbortSignal.timeout(5_000),
   });
 
   if (response.status === 404) return null;
@@ -60,9 +61,11 @@ module.exports = {
       .setRequired(true)),
 
   async execute(interaction) {
-    await interaction.deferReply({ ephemeral: true });
-
     try {
+      // Send a visible acknowledgement immediately rather than leaving Discord's
+      // interaction in the indefinite-looking deferred state while Roblox loads.
+      await interaction.reply({ content: 'Looking up that Roblox user and current game…', ephemeral: true });
+
       const input = interaction.options.getString('roblox-user', true).trim();
       const user = await findRobloxUser(input);
       if (!user) {
@@ -87,7 +90,16 @@ module.exports = {
       });
     } catch (error) {
       console.error('Joinuser lookup failed:', error);
-      await interaction.editReply(`Could not create a join link: ${error.message}`).catch(console.error);
+      const message = `Could not create a join link: ${error.name === 'TimeoutError' || error.name === 'AbortError' ? 'Roblox lookup timed out. Please try again.' : error.message}`;
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(message).catch(editError => {
+          console.error('Could not send joinuser error reply:', editError);
+        });
+      } else {
+        await interaction.reply({ content: message, ephemeral: true }).catch(replyError => {
+          console.error('Could not acknowledge joinuser interaction:', replyError);
+        });
+      }
     }
   },
 };
