@@ -1,0 +1,1 @@
+This update removes commit-link output from deployment announcements; commit details, changed files, and registered slash commands remain.
