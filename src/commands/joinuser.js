@@ -1,7 +1,8 @@
-const { SlashCommandBuilder } = require('discord.js');
+const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
 
 const USER_ID = /^\d{1,20}$/;
 const GAME_ID = /^[\w-]{1,128}$/;
+const ERROR_CHANNEL_ID = '1543612401017159700';
 const ROBLOX_API_HEADERS = {
   'user-agent': 'HF-Discord-Bot/1.0',
   accept: 'application/json',
@@ -11,7 +12,6 @@ async function getJson(url, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: { ...ROBLOX_API_HEADERS, ...(options.headers || {}) },
-    // Keep each Roblox call bounded so the Discord interaction always gets a result.
     signal: AbortSignal.timeout(5_000),
   });
 
@@ -46,8 +46,24 @@ async function getPresence(userId) {
   return result?.userPresences?.[0] || null;
 }
 
-function escapeMarkdown(value) {
-  return String(value).replace(/[\\`*_{}\[\]()#+\-.!|>~]/g, '\\$&');
+async function logError(interaction, error) {
+  try {
+    const channel = await interaction.client.channels.fetch(ERROR_CHANNEL_ID);
+    if (!channel?.isTextBased() || typeof channel.send !== 'function') return;
+
+    const details = [
+      '**Join-user lookup error**',
+      `**Server:** ${interaction.guild?.name || 'Direct message'} (${interaction.guildId || 'none'})`,
+      `**User:** ${interaction.user.tag} (${interaction.user.id})`,
+      `**Input:** \`${String(interaction.options.getString('roblox-user', true) || '').slice(0, 100).replace(/`/g, '')}\``,
+      `**Error:** ${String(error?.stack || error?.message || error).slice(0, 1200)}`,
+      `**Time:** <t:${Math.floor(Date.now() / 1000)}:F>`,
+    ].join('\n');
+
+    await channel.send({ content: details.slice(0, 1900), allowedMentions: { parse: [] } });
+  } catch (logError) {
+    console.error('Could not write Joinuser error log:', logError);
+  }
 }
 
 module.exports = {
@@ -62,14 +78,14 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      // Send a visible acknowledgement immediately rather than leaving Discord's
-      // interaction in the indefinite-looking deferred state while Roblox loads.
-      await interaction.reply({ content: 'Looking up that Roblox user and current game…', ephemeral: true });
+      await interaction.deferReply({ ephemeral: true });
 
       const input = interaction.options.getString('roblox-user', true).trim();
       const user = await findRobloxUser(input);
       if (!user) {
-        await interaction.editReply('I could not find that Roblox user. Check the username or user ID and try again.');
+        await interaction.editReply({
+          content: 'I could not find that Roblox user. Check the username or user ID and try again.',
+        });
         return;
       }
 
@@ -77,28 +93,44 @@ module.exports = {
       const placeId = String(presence?.placeId || '');
       const gameId = String(presence?.gameId || '');
       if (presence?.userPresenceType !== 2 || !/^\d{1,20}$/.test(placeId) || !GAME_ID.test(gameId)) {
-        await interaction.editReply(`**${escapeMarkdown(user.username)}** is not currently in a joinable Roblox game server. They may be offline, in a private/restricted server, or have join access disabled.`);
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('No joinable Roblox server found')
+            .setColor(0xFEE75C)
+            .setDescription(`**${user.username}** is not currently in a joinable Roblox game server. They may be offline, in a private/restricted server, or have join access disabled.`)
+            .addFields({ name: 'User ID', value: user.id })],
+        });
         return;
       }
 
-      // Use the live place and server instance from Roblox presence, not a guessed/default experience.
       const joinUrl = new URL(`https://www.roblox.com/games/${placeId}`);
       joinUrl.searchParams.set('gameInstanceId', gameId);
+
       await interaction.editReply({
-        content: `**${escapeMarkdown(user.username)}** is currently playing. [Join their server](${joinUrl.toString()})\nRoblox place ID: \`${placeId}\`. Roblox privacy settings and server availability may still prevent joining.`,
-        allowedMentions: { parse: [] },
+        embeds: [new EmbedBuilder()
+          .setTitle('Join Roblox server')
+          .setColor(0x57F287)
+          .setDescription(`**${user.username}** is currently in a joinable Roblox game server.`)
+          .addFields(
+            { name: 'Join link', value: `[Open the server in Roblox](${joinUrl.toString()})` },
+            { name: 'Roblox place ID', value: placeId, inline: true },
+            { name: 'Server instance', value: `\`${gameId}\``, inline: false },
+          )
+          .setFooter({ text: 'The link must still pass Roblox privacy, friend, and server-availability settings.' })],
       });
     } catch (error) {
       console.error('Joinuser lookup failed:', error);
-      const message = `Could not create a join link: ${error.name === 'TimeoutError' || error.name === 'AbortError' ? 'Roblox lookup timed out. Please try again.' : error.message}`;
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply(message).catch(editError => {
-          console.error('Could not send joinuser error reply:', editError);
-        });
-      } else {
-        await interaction.reply({ content: message, ephemeral: true }).catch(replyError => {
-          console.error('Could not acknowledge joinuser interaction:', replyError);
-        });
+      await logError(interaction, error);
+
+      const message = error.name === 'TimeoutError' || error.name === 'AbortError'
+        ? 'Could not create a join link: the Roblox lookup timed out. Please try again.'
+        : `Could not create a join link: ${error.message || 'unexpected lookup error'}`;
+
+      try {
+        if (interaction.deferred) await interaction.editReply({ content: message });
+        else if (!interaction.replied) await interaction.reply({ content: message, ephemeral: true });
+      } catch (replyError) {
+        console.error('Could not send Joinuser error reply:', replyError);
       }
     }
   },

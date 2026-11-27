@@ -55,31 +55,20 @@ const UPDATE_REPOSITORY = process.env.GITHUB_REPOSITORY || process.env.BOT_UPDAT
 
 async function getReleaseDetails(releaseId) {
   if (process.env.BOT_UPDATE_NOTES?.trim()) {
-    return {
-      summary: process.env.BOT_UPDATE_NOTES.trim().slice(0, 900),
-      files: [],
-    };
+    return { summary: process.env.BOT_UPDATE_NOTES.trim().slice(0, 900), files: [] };
   }
-
   if (!/^[a-f0-9]{7,64}$/i.test(releaseId)) return null;
   try {
-    const response = await fetch(
-      `https://api.github.com/repos/${UPDATE_REPOSITORY}/commits/${releaseId}`,
-      {
-        headers: {
-          accept: 'application/vnd.github+json',
-          'user-agent': 'HF-Discord-Bot/1.0',
-        },
-        signal: AbortSignal.timeout(8000),
-      },
-    );
+    const response = await fetch(`https://api.github.com/repos/${UPDATE_REPOSITORY}/commits/${releaseId}`, {
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'HF-Discord-Bot/1.0' },
+      signal: AbortSignal.timeout(8000),
+    });
     if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
     const commit = await response.json();
-    const summary = String(commit.commit?.message || '').trim().slice(0, 900);
-    const files = Array.isArray(commit.files)
-      ? commit.files.map(file => file.filename).filter(Boolean).slice(0, 12)
-      : [];
-    return { summary, files };
+    return {
+      summary: String(commit.commit?.message || '').trim().slice(0, 900),
+      files: Array.isArray(commit.files) ? commit.files.map(file => file.filename).filter(Boolean).slice(0, 12) : [],
+    };
   } catch (error) {
     console.warn('Could not load deployment change details from GitHub:', error.message);
     return null;
@@ -92,56 +81,48 @@ async function announceDeployment() {
     console.log('Skipping update announcement: set RENDER_GIT_COMMIT, GITHUB_SHA, or BOT_UPDATE_ID to identify this release.');
     return;
   }
-
   try {
     const channel = await client.channels.fetch(UPDATE_CHANNEL_ID);
-    if (!channel?.isTextBased() || !channel.messages || !channel.send) {
-      console.warn(`Update announcement skipped: ${UPDATE_CHANNEL_ID} is not an accessible text channel.`);
-      return;
-    }
+    if (!channel?.isTextBased() || typeof channel.send !== 'function') return;
 
     const marker = `HF-BOT-UPDATE:${releaseId}`;
     const recent = await channel.messages.fetch({ limit: 50 });
-    if (recent.some(message => message.author.id === client.user.id && message.content.includes(marker))) {
-      console.log(`Deployment ${releaseId} was already announced.`);
-      return;
-    }
+    if (recent.some(message => message.author.id === client.user.id && message.content.includes(marker))) return;
 
     const details = await getReleaseDetails(releaseId);
     const shortReleaseId = releaseId.slice(0, 12);
-    const commitUrl = /^[a-f0-9]{7,64}$/i.test(releaseId)
-      ? `https://github.com/${UPDATE_REPOSITORY}/commit/${releaseId}`
-      : null;
+    const commitUrl = /^[a-f0-9]{7,64}$/i.test(releaseId) ? `https://github.com/${UPDATE_REPOSITORY}/commit/${releaseId}` : null;
     const lines = [
       `**HF bot update deployed** (${shortReleaseId})`,
       details?.summary ? `\n**Changes**\n${details.summary}` : '\n**Changes**\nDetailed commit notes were unavailable for this deployment.',
     ];
-    if (details?.files?.length) {
-      lines.push(`\n**Files updated**\n${details.files.map(file => `• \`${file}\``).join('\n')}`);
-      const changedFileCount = Number.isInteger(details.changedFileCount) ? details.changedFileCount : details.files.length;
-      if (changedFileCount > details.files.length) lines.push(`• …and ${changedFileCount - details.files.length} more file(s)`);
-    }
+    if (details?.files?.length) lines.push(`\n**Files updated**\n${details.files.map(file => `• \`${file}\``).join('\n')}`);
     lines.push(`\n**Registered commands:** ${[...client.commands.keys()].map(name => `/${name}`).join(', ') || 'none'}`);
     if (commitUrl) lines.push(`\n[View commit](${commitUrl})`);
     lines.push(`\n||${marker}||`);
 
-    await channel.send({
-      content: lines.join('\n').slice(0, 1950),
-      allowedMentions: { parse: [] },
-    });
-    console.log(`Announced deployment ${releaseId} in channel ${UPDATE_CHANNEL_ID}.`);
+    await channel.send({ content: lines.join('\n').slice(0, 1950), allowedMentions: { parse: [] } });
   } catch (error) {
     console.error('Could not announce bot deployment:', error);
+  }
+}
+
+async function logInteractionError(interaction, error) {
+  if (interaction.commandName === 'joinuser') return;
+  try {
+    const channel = await client.channels.fetch(UPDATE_CHANNEL_ID);
+    if (!channel?.isTextBased() || typeof channel.send !== 'function') return;
+    const details = `**Interaction error**\n**Command:** /${interaction.commandName || 'unknown'}\n**Server:** ${interaction.guildId || 'DM'}\n**User:** ${interaction.user?.tag || 'unknown'} (${interaction.user?.id || 'unknown'})\n**Error:** ${String(error?.stack || error).slice(0, 1200)}\n**Time:** <t:${Math.floor(Date.now() / 1000)}:F>`;
+    await channel.send({ content: details.slice(0, 1900), allowedMentions: { parse: [] } });
+  } catch (logError) {
+    console.error('Could not write interaction error log:', logError);
   }
 }
 
 const server = http.createServer((request, response) => {
   if (request.url === '/' || request.url === '/health') {
     const healthy = client.isReady();
-    response.writeHead(healthy ? 200 : 503, {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-    });
+    response.writeHead(healthy ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     response.end(JSON.stringify({ status: healthy ? 'ok' : 'starting' }));
     return;
   }
@@ -178,10 +159,7 @@ client.on('messageCreate', async message => {
 
     const prompt = message.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
     if (!prompt) {
-      await message.reply({
-        content: 'Hi! Mention me with a question, reply to one of my messages, or send me a DM.',
-        allowedMentions: { parse: [] },
-      });
+      await message.reply({ content: 'Hi! Mention me with a question, reply to one of my messages, or send me a DM.', allowedMentions: { parse: [] } });
       return;
     }
 
@@ -214,13 +192,8 @@ client.on('interactionCreate', async interaction => {
       if (!Number.isInteger(currentPage)) return;
       const nextPage = direction === 'next' ? currentPage + 1 : currentPage - 1;
       const { readRecords } = require('./store');
-      const records = readRecords()
-        .filter(record => record.guildId === interaction.guildId)
-        .reverse();
-      await interaction.update({
-        ...client.commands.get('cheaters').pageEmbed(records, nextPage),
-        allowedMentions: { parse: [] },
-      });
+      const records = readRecords().filter(record => record.guildId === interaction.guildId).reverse();
+      await interaction.update({ ...client.commands.get('cheaters').pageEmbed(records, nextPage), allowedMentions: { parse: [] } });
       return;
     }
 
@@ -229,6 +202,7 @@ client.on('interactionCreate', async interaction => {
     }
   } catch (error) {
     console.error('Interaction failed:', error);
+    await logInteractionError(interaction, error);
     if (!interaction.isRepliable()) return;
     const reply = { content: 'There was an error handling this interaction.', ephemeral: true };
     if (interaction.deferred || interaction.replied) await interaction.followUp(reply).catch(console.error);
@@ -254,10 +228,7 @@ server.listen(port, '0.0.0.0', () => console.log(`Health server listening on 0.0
 
 function shutdown(signal) {
   console.log(`${signal} received; shutting down`);
-  server.close(() => {
-    client.destroy();
-    process.exit(0);
-  });
+  server.close(() => { client.destroy(); process.exit(0); });
   setTimeout(() => process.exit(1), 10_000).unref();
 }
 process.once('SIGTERM', () => shutdown('SIGTERM'));
