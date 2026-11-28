@@ -12,7 +12,7 @@ async function getJson(url, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: { ...ROBLOX_API_HEADERS, ...(options.headers || {}) },
-    signal: AbortSignal.timeout(5_000),
+    signal: AbortSignal.timeout(4_000),
   });
 
   if (response.status === 404) return null;
@@ -51,11 +51,12 @@ async function logError(interaction, error) {
     const channel = await interaction.client.channels.fetch(ERROR_CHANNEL_ID);
     if (!channel?.isTextBased() || typeof channel.send !== 'function') return;
 
+    const input = interaction.options.getString('roblox-user', true) || '';
     const details = [
       '**Join-user lookup error**',
       `**Server:** ${interaction.guild?.name || 'Direct message'} (${interaction.guildId || 'none'})`,
       `**User:** ${interaction.user.tag} (${interaction.user.id})`,
-      `**Input:** \`${String(interaction.options.getString('roblox-user', true) || '').slice(0, 100).replace(/`/g, '')}\``,
+      `**Input:** \`${String(input).slice(0, 100).replace(/`/g, '')}\``,
       `**Error:** ${String(error?.stack || error?.message || error).slice(0, 1200)}`,
       `**Time:** <t:${Math.floor(Date.now() / 1000)}:F>`,
     ].join('\n');
@@ -78,14 +79,14 @@ module.exports = {
 
   async execute(interaction) {
     try {
-      await interaction.deferReply({ ephemeral: true });
+      // Acknowledge immediately with a normal ephemeral response so the command
+      // does not sit on Discord's loading indicator while Roblox is queried.
+      await interaction.reply({ content: 'Looking up that Roblox user and their current game…', ephemeral: true });
 
       const input = interaction.options.getString('roblox-user', true).trim();
       const user = await findRobloxUser(input);
       if (!user) {
-        await interaction.editReply({
-          content: 'I could not find that Roblox user. Check the username or user ID and try again.',
-        });
+        await interaction.editReply({ content: 'I could not find that Roblox user. Check the username or user ID and try again.' });
         return;
       }
 
@@ -94,6 +95,7 @@ module.exports = {
       const gameId = String(presence?.gameId || '');
       if (presence?.userPresenceType !== 2 || !/^\d{1,20}$/.test(placeId) || !GAME_ID.test(gameId)) {
         await interaction.editReply({
+          content: '',
           embeds: [new EmbedBuilder()
             .setTitle('No joinable Roblox server found')
             .setColor(0xFEE75C)
@@ -105,8 +107,8 @@ module.exports = {
 
       const joinUrl = new URL(`https://www.roblox.com/games/${placeId}`);
       joinUrl.searchParams.set('gameInstanceId', gameId);
-
       await interaction.editReply({
+        content: '',
         embeds: [new EmbedBuilder()
           .setTitle('Join Roblox server')
           .setColor(0x57F287)
@@ -120,18 +122,21 @@ module.exports = {
       });
     } catch (error) {
       console.error('Joinuser lookup failed:', error);
-      await logError(interaction, error);
-
       const message = error.name === 'TimeoutError' || error.name === 'AbortError'
         ? 'Could not create a join link: the Roblox lookup timed out. Please try again.'
         : `Could not create a join link: ${error.message || 'unexpected lookup error'}`;
 
-      try {
-        if (interaction.deferred) await interaction.editReply({ content: message });
-        else if (!interaction.replied) await interaction.reply({ content: message, ephemeral: true });
-      } catch (replyError) {
-        console.error('Could not send Joinuser error reply:', replyError);
+      // Prioritize completing the Discord interaction; logging must never delay the reply.
+      if (interaction.replied || interaction.deferred) {
+        await interaction.editReply({ content: message, embeds: [] }).catch(replyError => {
+          console.error('Could not send Joinuser error reply:', replyError);
+        });
+      } else {
+        await interaction.reply({ content: message, ephemeral: true }).catch(replyError => {
+          console.error('Could not acknowledge Joinuser interaction:', replyError);
+        });
       }
+      void logError(interaction, error);
     }
   },
 };
