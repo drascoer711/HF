@@ -91,14 +91,12 @@ async function announceDeployment() {
 
     const details = await getReleaseDetails(releaseId);
     const shortReleaseId = releaseId.slice(0, 12);
-    const commitUrl = /^[a-f0-9]{7,64}$/i.test(releaseId) ? `https://github.com/${UPDATE_REPOSITORY}/commit/${releaseId}` : null;
     const lines = [
       `**HF bot update deployed** (${shortReleaseId})`,
       details?.summary ? `\n**Changes**\n${details.summary}` : '\n**Changes**\nDetailed commit notes were unavailable for this deployment.',
     ];
     if (details?.files?.length) lines.push(`\n**Files updated**\n${details.files.map(file => `• \`${file}\``).join('\n')}`);
     lines.push(`\n**Registered commands:** ${[...client.commands.keys()].map(name => `/${name}`).join(', ') || 'none'}`);
-    if (commitUrl) lines.push(`\n[View commit](${commitUrl})`);
     lines.push(`\n||${marker}||`);
 
     await channel.send({ content: lines.join('\n').slice(0, 1950), allowedMentions: { parse: [] } });
@@ -112,7 +110,7 @@ async function logInteractionError(interaction, error) {
   try {
     const channel = await client.channels.fetch(UPDATE_CHANNEL_ID);
     if (!channel?.isTextBased() || typeof channel.send !== 'function') return;
-    const details = `**Interaction error**\n**Command:** /${interaction.commandName || 'unknown'}\n**Server:** ${interaction.guildId || 'DM'}\n**User:** ${interaction.user?.tag || 'unknown'} (${interaction.user?.id || 'unknown'})\n**Error:** ${String(error?.stack || error).slice(0, 1200)}\n**Time:** <t:${Math.floor(Date.now() / 1000)}:F>`;
+    const details = `**Interaction error**\n**Command:** /${interaction.commandName || 'unknown'}\n**Server:** ${interaction.guildId || 'DM'}\n**User:** ${interaction.user?.tag || 'unknown'} (${interaction.user?.id || 'unknown'})\n**Error:** ${String(error?.message || error).slice(0, 800)}`;
     await channel.send({ content: details.slice(0, 1900), allowedMentions: { parse: [] } });
   } catch (logError) {
     console.error('Could not write interaction error log:', logError);
